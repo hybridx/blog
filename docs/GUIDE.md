@@ -61,8 +61,8 @@ graph TD
 
 **Proxmox context**: The two nodes are NOT a Proxmox cluster. Proxmox clustering caused kernel panics because corosync's self-fencing mechanism intentionally panics the kernel when 2-node quorum is lost (which happens on any brief network interruption -- a fundamental limitation of 2-node clusters, not a bug). They run as independent Proxmox instances. k3s creates the cluster layer on top with much more graceful failure handling (marks nodes NotReady and reschedules pods instead of panicking).
 
-- **Laptop 1**: Independent Proxmox node, runs k3s server (control plane + worker)
-- **Laptop 2**: Independent Proxmox node, runs k3s agent (worker only)
+- **Laptop 1** (8GB RAM): Independent Proxmox node, runs k3s server VM (4096MB -- control plane + worker)
+- **Laptop 2** (8GB RAM): Independent Proxmox node, runs k3s agent VM (3072MB -- worker) + Monitoring VM (2048MB -- Prometheus, Grafana, Alertmanager, Loki)
 - **Inter-node network**: 100Mbps wired ethernet via TP-Link switch (fully wired, stable, sufficient for k3s)
 - **Internet path**: fully wired -- laptops -> switch -> main router -> ISP
 - **Home coverage**: wired routers (not repeaters) providing WiFi per area of duplex, each with UPS
@@ -78,7 +78,7 @@ We use QEMU VMs (not LXC containers) for k3s. VMs have full kernel isolation, so
 
 - LXC shares the host kernel. k3s needs specific kernel modules (overlay, br_netfilter), cgroup access, and mount capabilities that require hacking the LXC config. If Proxmox or the kernel updates, the hacks can break.
 - QEMU VMs run their own kernel. k3s installs cleanly with zero modifications. What works today will work after every Proxmox update.
-- The ~200MB RAM cost per node is worth the reliability. With 2GB per laptop and Proxmox using ~300-400MB, you have ~1.2-1.3GB for the VM. k3s server runs comfortably in 1GB.
+- The ~200MB RAM cost per node is worth the reliability. With 8GB per laptop and Proxmox using ~400-500MB, you have plenty of room for VMs. k3s server runs comfortably with 4GB.
 
 ### Step 1.1: Download Ubuntu Cloud Image
 
@@ -99,7 +99,7 @@ SSH into Proxmox host on Laptop 1:
 
 ```bash
 # Create the VM (ID 200)
-qm create 200 --name k3s-server --memory 1280 --cores 2 --net0 virtio,bridge=vmbr0
+qm create 200 --name k3s-server --memory 4096 --cores 2 --net0 virtio,bridge=vmbr0
 
 # Import the cloud image as the VM's disk
 qm importdisk 200 /var/lib/vz/template/iso/noble-server-cloudimg-amd64.img local-lvm
@@ -219,7 +219,7 @@ sudo cat /etc/rancher/k3s/k3s.yaml
 SSH into Proxmox host on Laptop 2. Same process as Step 1.2 but with different ID and IP:
 
 ```bash
-qm create 200 --name k3s-agent --memory 1280 --cores 2 --net0 virtio,bridge=vmbr0
+qm create 200 --name k3s-agent --memory 3072 --cores 2 --net0 virtio,bridge=vmbr0
 
 qm importdisk 200 /var/lib/vz/template/iso/noble-server-cloudimg-amd64.img local-lvm
 qm set 200 --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-200-disk-0
@@ -370,11 +370,11 @@ spec:
               mountPath: /var/lib/postgresql/data
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
               memory: "256Mi"
-              cpu: "500m"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
           livenessProbe:
             exec:
               command: ["pg_isready", "-U", "blog"]
@@ -472,11 +472,11 @@ spec:
               mountPath: /data
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
               memory: "256Mi"
-              cpu: "500m"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
           livenessProbe:
             httpGet:
               path: /minio/health/live
@@ -877,11 +877,11 @@ spec:
                 name: blog-secrets
           resources:
             requests:
-              memory: "128Mi"
-              cpu: "100m"
-            limits:
               memory: "256Mi"
-              cpu: "500m"
+              cpu: "200m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
           readinessProbe:
             httpGet:
               path: /api/health
@@ -1007,23 +1007,26 @@ curl -I https://blog.181094.xyz/api/health
 
 ### Step 5.1: Resource Budget
 
-Each QEMU VM gets 1280MB RAM. Budget per VM:
+With 8GB per laptop and Proxmox using ~500MB, each VM gets generous allocations. Budget per VM:
 
 ```
-Laptop 1 VM (k3s-server, 1280MB):
-  k3s control plane:   ~300MB
+Laptop 1 VM (k3s-server, 4096MB):
+  k3s control plane:   ~300MB (API server, scheduler, controller-manager, SQLite)
   Traefik:             ~80MB
   cert-manager:        ~100MB
-  PostgreSQL:           256MB limit
-  Blog pod 1:           256MB limit
-  Remaining:            ~288MB buffer
+  PostgreSQL:           512MB limit
+  Blog Pod 1:           512MB limit
+  postgres_exporter:    ~50MB
+  Remaining:            ~2.5GB buffer (headroom for HPA pods, future services)
 
-Laptop 2 VM (k3s-agent, 1280MB):
-  k3s agent:            ~200MB
-  MinIO:                256MB limit
-  Blog pod 2:           256MB limit
-  Remaining:            ~568MB buffer (absorbs HPA pod 3 or 4)
+Laptop 2 VM (k3s-agent, 3072MB):
+  k3s agent:            ~200MB (kubelet, flannel, kube-proxy)
+  MinIO:                512MB limit
+  Blog Pod 2:           512MB limit
+  Remaining:            ~1.8GB buffer (absorbs HPA scaling to pods 3-6)
 ```
+
+Laptop 2 also runs the **Monitoring VM** (2048MB) separately -- see Phase 9.
 
 ### Step 5.2: Horizontal Pod Autoscaler (HPA)
 
@@ -1046,7 +1049,7 @@ spec:
     kind: Deployment
     name: blog
   minReplicas: 2
-  maxReplicas: 4
+  maxReplicas: 6
   metrics:
     - type: Resource
       resource:
@@ -1080,7 +1083,7 @@ spec:
 - HPA watches metrics-server for CPU/memory usage
 - When average CPU across all blog pods exceeds 70%, it adds a pod (up to 4 max)
 - Scale-down is slower (5 min stabilization) to prevent flapping
-- On your 2-node cluster, 4 pods means 2 per node
+- On your 2-node cluster, 6 pods means up to 3 per node -- with 512MB per pod limit and ~2GB+ buffer per VM, there's plenty of room
 
 ### Step 5.3: Pod Disruption Budget (PDB)
 
@@ -1191,12 +1194,12 @@ spec:
             - containerPort: 6379
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
-            limits:
               memory: "128Mi"
-              cpu: "200m"
-          command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+          command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
 ```
 
 ---
@@ -1378,11 +1381,690 @@ export async function GET() {
 }
 ```
 
-### Step 8.2: Lightweight Monitoring
+### Step 8.2: Monitoring
 
-On constrained hardware, skip full Prometheus/Grafana. Instead:
+See **Phase 9** for the full industry-standard monitoring setup with Prometheus, Grafana, and Alertmanager in a dedicated VM. For quick ad-hoc checks during development:
 
-- Use `kubectl top pods` and `kubectl top nodes` for quick checks
-- The health endpoint gives you app-level status
-- k3s metrics-server is already running
-- If you want dashboards later, consider Beszel (~30MB RAM)
+```bash
+kubectl top pods -n blog    # CPU/memory per pod
+kubectl top nodes            # CPU/memory per node
+kubectl get hpa -n blog     # Current HPA state
+curl -s https://blog.181094.xyz/api/health | jq  # App health
+```
+
+---
+
+## Phase 9: Monitoring -- Prometheus, Grafana, Alertmanager (Weekend 6-7)
+
+This phase sets up a dedicated monitoring VM that watches **everything** -- both Proxmox hosts, the k3s cluster, all application services, and any external websites. This is an industry-standard observability stack that runs independently from k3s so it can alert you when k3s itself goes down.
+
+### Why a Dedicated VM (Not Inside k3s)
+
+- If k3s crashes, monitoring inside k3s dies with it -- you'd never get an alert
+- Prometheus needs to scrape the Proxmox hosts directly (outside k8s)
+- This VM serves all your projects, not just the blog
+- Clear separation: k3s runs workloads, monitoring VM watches everything
+
+### Step 9.1: Create Monitoring VM on Laptop 2
+
+SSH into Proxmox host on Laptop 2:
+
+```bash
+# Create monitoring VM (ID 201, separate from k3s-agent VM 200)
+qm create 201 --name monitoring --memory 2048 --cores 2 --net0 virtio,bridge=vmbr0
+
+qm importdisk 201 /var/lib/vz/template/iso/noble-server-cloudimg-amd64.img local-lvm
+qm set 201 --scsihw virtio-scsi-pci --scsi0 local-lvm:vm-201-disk-0
+qm resize 201 scsi0 30G
+qm set 201 --ide2 local-lvm:cloudinit
+qm set 201 --boot c --bootdisk scsi0
+qm set 201 --agent enabled=1
+
+qm set 201 --ciuser deepesh
+qm set 201 --cipassword <your-password>
+qm set 201 --ipconfig0 ip=192.168.1.12/24,gw=192.168.1.1
+qm set 201 --nameserver 192.168.1.1
+qm set 201 --sshkeys ~/.ssh/authorized_keys
+
+qm start 201
+```
+
+**Why Laptop 2:** If Laptop 1 (k3s control plane) goes down, monitoring on Laptop 2 still detects and alerts you. If Laptop 2 goes down, k3s on Laptop 1 marks the agent NotReady and you can check from the control plane directly.
+
+### Step 9.2: Install Node Exporter on Every Host
+
+Node Exporter exposes system metrics (CPU, RAM, disk, network) on port 9100. Install it on:
+- Both Proxmox hosts (bare metal)
+- The k3s-server VM
+- The k3s-agent VM
+- The monitoring VM itself
+
+On each machine:
+
+```bash
+# Download and install Node Exporter
+curl -LO https://github.com/prometheus/node_exporter/releases/download/v1.9.0/node_exporter-1.9.0.linux-amd64.tar.gz
+tar xzf node_exporter-1.9.0.linux-amd64.tar.gz
+sudo mv node_exporter-1.9.0.linux-amd64/node_exporter /usr/local/bin/
+
+# Create systemd service
+sudo tee /etc/systemd/system/node_exporter.service <<'EOF'
+[Unit]
+Description=Node Exporter
+After=network.target
+
+[Service]
+User=nobody
+ExecStart=/usr/local/bin/node_exporter
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now node_exporter
+
+# Verify
+curl -s http://localhost:9100/metrics | head -5
+```
+
+### Step 9.3: Install Prometheus
+
+SSH into the monitoring VM (`192.168.1.12`):
+
+```bash
+# Create prometheus user
+sudo useradd --no-create-home --shell /bin/false prometheus
+sudo mkdir -p /etc/prometheus /var/lib/prometheus
+
+# Download Prometheus
+curl -LO https://github.com/prometheus/prometheus/releases/download/v3.2.1/prometheus-3.2.1.linux-amd64.tar.gz
+tar xzf prometheus-3.2.1.linux-amd64.tar.gz
+sudo mv prometheus-3.2.1.linux-amd64/prometheus /usr/local/bin/
+sudo mv prometheus-3.2.1.linux-amd64/promtool /usr/local/bin/
+sudo chown prometheus:prometheus /usr/local/bin/prometheus /usr/local/bin/promtool
+sudo chown -R prometheus:prometheus /var/lib/prometheus
+```
+
+Create Prometheus config:
+
+```bash
+sudo tee /etc/prometheus/prometheus.yml <<'EOF'
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['localhost:9093']
+
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+scrape_configs:
+  # Monitor Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Proxmox Host 1 (bare metal)
+  - job_name: 'proxmox-host-1'
+    static_configs:
+      - targets: ['192.168.1.x:9100']  # Replace with actual Proxmox host IP
+        labels:
+          host: 'laptop-1'
+          role: 'proxmox-host'
+
+  # Proxmox Host 2 (bare metal)
+  - job_name: 'proxmox-host-2'
+    static_configs:
+      - targets: ['192.168.1.x:9100']  # Replace with actual Proxmox host IP
+        labels:
+          host: 'laptop-2'
+          role: 'proxmox-host'
+
+  # k3s Server VM
+  - job_name: 'k3s-server-vm'
+    static_configs:
+      - targets: ['192.168.1.10:9100']
+        labels:
+          host: 'k3s-server'
+          role: 'k3s-control-plane'
+
+  # k3s Agent VM
+  - job_name: 'k3s-agent-vm'
+    static_configs:
+      - targets: ['192.168.1.11:9100']
+        labels:
+          host: 'k3s-agent'
+          role: 'k3s-worker'
+
+  # Monitoring VM itself
+  - job_name: 'monitoring-vm'
+    static_configs:
+      - targets: ['localhost:9100']
+        labels:
+          host: 'monitoring'
+          role: 'monitoring'
+
+  # k3s API Server metrics
+  - job_name: 'k3s-apiserver'
+    scheme: https
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/k3s-token
+    static_configs:
+      - targets: ['192.168.1.10:6443']
+
+  # MinIO built-in metrics
+  - job_name: 'minio'
+    metrics_path: /minio/v2/metrics/cluster
+    scheme: http
+    static_configs:
+      - targets: ['192.168.1.11:9000']  # MinIO NodePort or port-forward
+
+  # PostgreSQL (via postgres_exporter running in k3s)
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['192.168.1.10:9187']  # postgres_exporter NodePort
+
+  # Blog app custom metrics (add /metrics endpoint to your app)
+  - job_name: 'blog-app'
+    static_configs:
+      - targets: ['192.168.1.10:4321']  # Blog NodePort
+    metrics_path: /api/metrics
+
+  # External website probing via blackbox_exporter
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://blog.181094.xyz
+          - https://181094.xyz
+          # Add any other websites here
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9115
+EOF
+```
+
+Create systemd service:
+
+```bash
+sudo tee /etc/systemd/system/prometheus.service <<'EOF'
+[Unit]
+Description=Prometheus
+After=network.target
+
+[Service]
+User=prometheus
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus/ \
+  --storage.tsdb.retention.time=30d \
+  --web.enable-lifecycle
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now prometheus
+
+# Verify
+curl -s http://localhost:9090/-/healthy
+```
+
+**What `--storage.tsdb.retention.time=30d` does:** keeps 30 days of metrics data. With ~10 scrape targets at 15s intervals, this uses roughly 500MB-1GB of disk. The 30GB disk on this VM has plenty of room.
+
+### Step 9.4: Install Alertmanager
+
+```bash
+curl -LO https://github.com/prometheus/alertmanager/releases/download/v0.28.1/alertmanager-0.28.1.linux-amd64.tar.gz
+tar xzf alertmanager-0.28.1.linux-amd64.tar.gz
+sudo mv alertmanager-0.28.1.linux-amd64/alertmanager /usr/local/bin/
+
+sudo mkdir -p /etc/alertmanager
+
+sudo tee /etc/alertmanager/alertmanager.yml <<'EOF'
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'discord'
+
+receivers:
+  - name: 'discord'
+    discord_configs:
+      - webhook_url: '<your-discord-webhook-url>'
+        title: '{{ .GroupLabels.alertname }}'
+        message: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  # Or use Telegram:
+  # - name: 'telegram'
+  #   telegram_configs:
+  #     - bot_token: '<your-bot-token>'
+  #       chat_id: <your-chat-id>
+EOF
+
+sudo tee /etc/systemd/system/alertmanager.service <<'EOF'
+[Unit]
+Description=Alertmanager
+After=network.target
+
+[Service]
+User=prometheus
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager/
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now alertmanager
+```
+
+### Step 9.5: Create Alert Rules
+
+```bash
+sudo mkdir -p /etc/prometheus/rules
+
+sudo tee /etc/prometheus/rules/homelab.yml <<'EOF'
+groups:
+  - name: node
+    rules:
+      - alert: NodeDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: '{{ $labels.instance }} is down'
+
+      - alert: HighCPU
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'CPU > 85% on {{ $labels.instance }}'
+
+      - alert: HighMemory
+        expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Memory > 90% on {{ $labels.instance }}'
+
+      - alert: DiskAlmostFull
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Disk > 85% on {{ $labels.instance }}'
+
+  - name: blog
+    rules:
+      - alert: BlogDown
+        expr: probe_success{job="blackbox-http", instance="https://blog.181094.xyz"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'blog.181094.xyz is unreachable'
+
+      - alert: SSLExpiringSoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 7 * 24 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: 'SSL cert expires in < 7 days for {{ $labels.instance }}'
+
+      - alert: HighResponseTime
+        expr: probe_http_duration_seconds{phase="transfer"} > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Response time > 2s for {{ $labels.instance }}'
+
+  - name: postgresql
+    rules:
+      - alert: PostgreSQLDown
+        expr: pg_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'PostgreSQL is down'
+
+      - alert: TooManyConnections
+        expr: pg_stat_database_numbackends / pg_settings_max_connections * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'PostgreSQL connections > 80% of max'
+EOF
+
+# Validate and reload
+promtool check rules /etc/prometheus/rules/homelab.yml
+curl -X POST http://localhost:9090/-/reload
+```
+
+### Step 9.6: Install Blackbox Exporter
+
+Blackbox exporter probes external URLs (HTTP, TCP, ICMP, DNS) so Prometheus can track uptime, response time, and SSL certificate expiry for your websites.
+
+```bash
+curl -LO https://github.com/prometheus/blackbox_exporter/releases/download/v0.26.0/blackbox_exporter-0.26.0.linux-amd64.tar.gz
+tar xzf blackbox_exporter-0.26.0.linux-amd64.tar.gz
+sudo mv blackbox_exporter-0.26.0.linux-amd64/blackbox_exporter /usr/local/bin/
+
+sudo mkdir -p /etc/blackbox_exporter
+
+sudo tee /etc/blackbox_exporter/config.yml <<'EOF'
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200]
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+  icmp:
+    prober: icmp
+    timeout: 5s
+EOF
+
+sudo tee /etc/systemd/system/blackbox_exporter.service <<'EOF'
+[Unit]
+Description=Blackbox Exporter
+After=network.target
+
+[Service]
+User=prometheus
+ExecStart=/usr/local/bin/blackbox_exporter --config.file=/etc/blackbox_exporter/config.yml
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now blackbox_exporter
+```
+
+### Step 9.7: Install postgres_exporter in k3s
+
+Deploy postgres_exporter as a pod inside k3s that scrapes your PostgreSQL and exposes metrics for Prometheus to collect.
+
+```yaml
+# k8s/postgres-exporter.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  namespace: blog
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+    spec:
+      containers:
+        - name: postgres-exporter
+          image: prometheuscommunity/postgres-exporter:v0.16.0
+          ports:
+            - containerPort: 9187
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://blog:<pg-password>@postgres:5432/blog?sslmode=disable"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "64Mi"
+              cpu: "200m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  namespace: blog
+spec:
+  type: NodePort
+  selector:
+    app: postgres-exporter
+  ports:
+    - port: 9187
+      targetPort: 9187
+      nodePort: 30187
+```
+
+Apply: `kubectl apply -f k8s/postgres-exporter.yaml`
+
+The NodePort (30187) makes it accessible from the monitoring VM at `192.168.1.10:30187`.
+
+### Step 9.8: Install Grafana
+
+```bash
+# Install Grafana from the official APT repo
+sudo apt-get install -y apt-transport-https software-properties-common
+sudo mkdir -p /etc/apt/keyrings/
+wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+sudo apt-get update
+sudo apt-get install -y grafana
+
+# Start Grafana
+sudo systemctl enable --now grafana-server
+
+# Grafana is now available at http://192.168.1.12:3000
+# Default login: admin / admin (change on first login)
+```
+
+**Configure Prometheus as a data source:**
+
+1. Open `http://192.168.1.12:3000` in your browser
+2. Go to Configuration -> Data Sources -> Add data source
+3. Select Prometheus
+4. URL: `http://localhost:9090`
+5. Click "Save & Test"
+
+**Import community dashboards:**
+
+Go to Dashboards -> Import and use these dashboard IDs:
+
+| Dashboard ID | Name | What it shows |
+|---|---|---|
+| 1860 | Node Exporter Full | CPU, memory, disk, network per host/VM |
+| 9628 | PostgreSQL Database | Connections, query stats, cache hit ratio |
+| 13502 | MinIO Overview | Storage, requests, errors |
+| 15757 | k3s / Kubernetes | Pod status, deployments, HPA, resource usage |
+| 7587 | Blackbox Exporter | Uptime, response time, SSL expiry for websites |
+
+### Step 9.9: Access Log Analytics via Grafana (Replaces Pendo)
+
+Instead of a separate analytics tool, parse Traefik access logs to get page views, top pages, referrers, and geographic data -- all in Grafana.
+
+**Step 1: Configure Traefik for JSON access logs** in k3s:
+
+```bash
+# Edit the Traefik configmap
+kubectl edit configmap traefik -n kube-system
+```
+
+Add to the Traefik config:
+
+```yaml
+accessLog:
+  filePath: "/var/log/traefik/access.log"
+  format: json
+  fields:
+    headers:
+      names:
+        User-Agent: keep
+        Referer: keep
+```
+
+**Step 2: Install Loki + Promtail** on the monitoring VM:
+
+```bash
+# Install Loki (log aggregation -- like Prometheus but for logs)
+curl -LO https://github.com/grafana/loki/releases/download/v3.4.2/loki-linux-amd64.zip
+unzip loki-linux-amd64.zip
+sudo mv loki-linux-amd64 /usr/local/bin/loki
+
+sudo mkdir -p /etc/loki /var/lib/loki
+
+sudo tee /etc/loki/config.yml <<'EOF'
+auth_enabled: false
+server:
+  http_listen_port: 3100
+common:
+  path_prefix: /var/lib/loki
+  storage:
+    filesystem:
+      chunks_directory: /var/lib/loki/chunks
+      rules_directory: /var/lib/loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+limits_config:
+  retention_period: 30d
+EOF
+
+sudo tee /etc/systemd/system/loki.service <<'EOF'
+[Unit]
+Description=Loki
+After=network.target
+
+[Service]
+User=prometheus
+ExecStart=/usr/local/bin/loki -config.file=/etc/loki/config.yml
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now loki
+```
+
+**Step 3: Install Promtail** on the k3s-server VM (where Traefik runs):
+
+```bash
+# On the k3s-server VM (192.168.1.10)
+curl -LO https://github.com/grafana/loki/releases/download/v3.4.2/promtail-linux-amd64.zip
+unzip promtail-linux-amd64.zip
+sudo mv promtail-linux-amd64 /usr/local/bin/promtail
+
+sudo mkdir -p /etc/promtail
+
+sudo tee /etc/promtail/config.yml <<'EOF'
+server:
+  http_listen_port: 9080
+positions:
+  filename: /var/lib/promtail/positions.yaml
+clients:
+  - url: http://192.168.1.12:3100/loki/api/v1/push
+scrape_configs:
+  - job_name: traefik
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: traefik
+          __path__: /var/log/traefik/access.log
+EOF
+
+sudo systemctl enable --now promtail
+```
+
+**Step 4: Add Loki as a data source in Grafana:**
+
+1. Configuration -> Data Sources -> Add data source -> Loki
+2. URL: `http://localhost:3100`
+3. Save & Test
+
+Now you can build Grafana dashboards that query Traefik access logs to show page views, top pages, referrers, user agents, response codes, and latency distributions -- no JavaScript analytics snippet needed, works even when readers use ad blockers.
+
+### Step 9.10: DNS and Access
+
+Set up DNS so you can reach Grafana from outside your network:
+
+1. In Cloudflare: add `grafana` A record pointing to your homelab public IP
+2. On the monitoring VM, install Caddy as a reverse proxy with automatic TLS:
+
+```bash
+sudo apt install -y caddy
+
+sudo tee /etc/caddy/Caddyfile <<'EOF'
+grafana.181094.xyz {
+    reverse_proxy localhost:3000
+}
+EOF
+
+sudo systemctl restart caddy
+```
+
+Or keep Grafana internal-only (accessible only on your LAN at `192.168.1.12:3000`) if you don't want to expose it to the internet.
+
+### Monitoring VM Resource Budget
+
+```
+Monitoring VM (2048MB):
+  OS + overhead:        ~200MB
+  Prometheus:           ~400MB (30d retention, ~10 targets)
+  Grafana:              ~250MB
+  Alertmanager:         ~50MB
+  Loki:                 ~200MB
+  Blackbox Exporter:    ~20MB
+  Node Exporter:        ~20MB
+  Remaining:            ~900MB buffer
+```
+
+### Troubleshooting Phase 9
+
+| Problem | Likely Cause | Fix |
+|---|---|---|
+| Prometheus can't scrape targets | Firewall on target VM | Open port 9100 (node_exporter), 9187 (postgres), etc. |
+| Grafana shows "No data" | Wrong data source URL | Verify Prometheus URL is `http://localhost:9090` |
+| Alerts not firing | Alertmanager not connected | Check `curl localhost:9093/-/healthy` |
+| Loki not receiving logs | Promtail can't reach Loki | Check `curl http://192.168.1.12:3100/ready` from k3s VM |
+| High Prometheus memory | Too many metrics/targets | Reduce scrape frequency or add metric relabeling to drop unused metrics |

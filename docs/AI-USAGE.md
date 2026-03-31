@@ -14,6 +14,7 @@
 | **Kubernetes manifests** (`k8s/*.yaml`) | Write every Deployment, Service, Ingress, StatefulSet, HPA, PDB by hand. You need to understand what every field does. Copy from the plan, but type it out -- don't generate it. |
 | **Cloudflare Worker** (`cloudflare-worker/index.js`) | The failover logic is <50 lines. Write it yourself to understand health checking, state management at the edge, and request proxying. |
 | **Load test scripts** (`load-test.js`) | Writing k6 test scenarios forces you to think about traffic patterns, user behavior, and what metrics matter. |
+| **Prometheus alert rules** | Writing PromQL alert expressions forces you to think about what "unhealthy" actually means for each component. |
 
 ## OK to use AI for (these don't teach you anything new by doing manually)
 
@@ -28,6 +29,8 @@
 | **Package.json setup** | `npm install` commands, dependency management. Mechanical. |
 | **Error messages and HTTP status codes** | "What status code for rate limit exceeded?" -- AI is a fine reference for this. |
 | **README / documentation** | AI can help structure and polish docs. But write the technical content yourself first -- AI edits, you don't ghost-write. |
+| **Prometheus/Grafana setup** | Installation steps, systemd units, Grafana data source config. The learning is in PromQL queries and alert design, not installation. |
+| **Grafana dashboard JSON** | Import community dashboards (IDs 1860, 9628, etc.). Building dashboards from scratch doesn't teach you monitoring -- understanding the metrics does. |
 
 ## Use AI as a reviewer, not a writer
 

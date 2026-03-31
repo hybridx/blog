@@ -8,6 +8,7 @@ A self-hosted, server-side rendered blog platform running on a 2-node k3s cluste
 - **Infrastructure engineering**: k3s on Proxmox, StatefulSets, HPA, PDB, rolling updates, cert-manager
 - **Resilience design**: CDN failover via Cloudflare Worker, battery-backed compute nodes, wired networking with UPS
 - **Production practices**: Load testing (k6), health checks, container builds (Podman), CI/CD (GitHub Actions)
+- **Observability**: Prometheus + Grafana + Alertmanager in a dedicated monitoring VM, Loki for access log analytics
 
 ## Tech Stack
 
@@ -23,6 +24,9 @@ A self-hosted, server-side rendered blog platform running on a 2-node k3s cluste
 | TLS | cert-manager + Let's Encrypt (DNS-01 via Cloudflare) |
 | Edge / Failover | Cloudflare Worker + GitHub Pages static fallback |
 | CI/CD | GitHub Actions |
+| Monitoring | Prometheus + Grafana + Alertmanager (dedicated QEMU VM) |
+| Log Analytics | Loki + Promtail (Traefik access logs for web analytics) |
+| Alerting | Alertmanager -> Discord / Telegram |
 
 ## Documentation
 
@@ -67,6 +71,11 @@ graph TD
         MinIO[MinIO StatefulSet]
     end
 
+    subgraph monVM [Laptop 2 - Monitoring VM]
+        Prometheus[Prometheus]
+        Grafana[Grafana + Loki]
+    end
+
     Reader --> CF
     CF -->|healthy| Traefik
     CF -->|unhealthy| GHPages
@@ -81,6 +90,10 @@ graph TD
     ContentRepo -->|push triggers| GHActions
     GHActions -->|build + push image| GHCR
     GHActions -->|build static| GHPages
+    Prometheus -->|scrape| BlogPod1
+    Prometheus -->|scrape| BlogPod2
+    Prometheus -->|scrape| PG
+    Prometheus -->|scrape| MinIO
 ```
 
 ## Timeline
@@ -93,7 +106,8 @@ graph TD
 | 4 | Scaling: HPA, probes, PDB, load testing | Understand exactly where the system breaks |
 | 4-5 | Failover: static site + Cloudflare Worker | Blog stays readable when power goes out |
 | 5 | CI/CD: Podman + GitHub Actions | Push code, auto-deploy to k3s |
-| 5-6 | Monitoring, polish, first blog post | Write "Building a Resilient Homelab Blog" as the inaugural post |
+| 5-6 | Polish, first blog post | Write "Building a Resilient Homelab Blog" as the inaugural post |
+| 6-7 | Monitoring: Prometheus + Grafana + Alertmanager | Dedicated monitoring VM watching all hosts, VMs, services, and websites |
 
 ## Repo Structure
 

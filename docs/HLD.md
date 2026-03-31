@@ -38,10 +38,15 @@ Storage:
   Images:            ~500MB (year 1, MinIO)
   Database:          < 100MB (comments, users, sessions)
 
-Compute:
+Compute (per laptop: 8GB RAM, 2 cores):
   SSR render:        ~10ms per page (from cache)
   OAuth flow:        ~500ms (external provider round-trip)
   Comment write:     ~50ms (DB insert + sanitization)
+
+Monitoring:
+  Prometheus TSDB:   ~500MB-1GB disk (30d retention, ~10 targets)
+  Loki logs:         ~200MB-500MB disk (30d retention)
+  Metrics ingestion: ~1000 samples/s across all targets
 ```
 
 ## High-Level Architecture Diagram
@@ -76,6 +81,13 @@ graph TD
         end
     end
 
+    subgraph monitoringVM [Monitoring VM - Laptop 2]
+        Prometheus[Prometheus - Metrics Collection]
+        GrafanaBox[Grafana - Dashboards + Analytics]
+        AlertMgr[Alertmanager - Alerts]
+        Loki[Loki - Log Aggregation]
+    end
+
     subgraph external [External Services]
         GitHub[GitHub - Content Repo + OAuth]
         Google[Google - OAuth]
@@ -96,6 +108,13 @@ graph TD
     BlogPod2 --> MinIOBox
     BlogPod1 --> GitHub
     BlogPod2 --> GitHub
+    Prometheus -->|scrape| BlogPod1
+    Prometheus -->|scrape| BlogPod2
+    Prometheus -->|scrape| PG
+    Prometheus -->|scrape| MinIOBox
+    Prometheus --> AlertMgr
+    GrafanaBox --> Prometheus
+    GrafanaBox --> Loki
 ```
 
 ## Component Responsibilities
@@ -108,6 +127,10 @@ graph TD
 | **PostgreSQL** | Users, sessions, comments, rate limits | If PG fails: blog posts still render from cache (read-only degradation), no auth/comments |
 | **MinIO** | S3-compatible image storage, presigned URLs | If MinIO fails: image uploads fail, existing presigned URLs may still work from browser cache |
 | **GitHub** | Content source of truth, OAuth provider, container registry | If GitHub API down: serve from cache, OAuth unavailable |
+| **Prometheus** | Metrics collection from all hosts, VMs, and services. Alert evaluation. | If Prometheus fails: no metrics or alerts, but blog unaffected |
+| **Grafana** | Dashboards, visualization, access log analytics via Loki | If Grafana fails: no dashboards, but alerting via Alertmanager still works |
+| **Alertmanager** | Alert routing to Discord/Telegram/email | If Alertmanager fails: Prometheus still records metrics, but no notifications |
+| **Loki** | Log aggregation for Traefik access logs (web analytics) | If Loki fails: no log-based analytics, but all other monitoring works |
 
 ## Data Flow Diagrams
 
@@ -255,6 +278,9 @@ erDiagram
 | **TLS** | cert-manager + LE | Auto-renewal, DNS-01 works behind NAT. Not manual certs: expire and break. |
 | **Edge** | Cloudflare Worker | Free tier, programmable failover. Not Cloudflare LB: paid. |
 | **Auth** | Hand-built | Learning goal. Not Auth.js: black box, defeats the purpose. |
+| **Monitoring** | Prometheus + Grafana | Industry standard, extensible, monitors everything. Dedicated VM so it survives k3s failures. |
+| **Log Analytics** | Loki + Promtail | Lightweight log aggregation. Parses Traefik access logs for web analytics in Grafana. No JS snippet needed. |
+| **Alerting** | Alertmanager | Prometheus-native, routes to Discord/Telegram/email. Not PagerDuty: overkill for homelab. |
 
 ## Scalability Strategy
 
@@ -281,6 +307,7 @@ graph TD
 | Internet drops | External health check fails | Cloudflare routes to fallback | ~60-90s |
 | PostgreSQL crash | Readiness probe fails | Blog serves from cache (read-only) | ~30s (k8s restart) |
 | MinIO crash | Readiness probe fails | Image uploads fail, cached images OK | ~30s (k8s restart) |
+| Monitoring VM crash | Prometheus stops scraping | No alerts or dashboards, blog unaffected | Manual restart or Proxmox auto-start |
 
 ## Failover State Machine
 

@@ -281,23 +281,119 @@ sequenceDiagram
     Reader->>S3: Direct download via presigned URL
 ```
 
-## Kubernetes Resource Budget
+## Hardware Resource Budget (8GB per Laptop)
 
 ```
-Laptop 1 QEMU VM (k3s-server, 1280MB):
-  k3s control plane:    ~300MB (API server, scheduler, controller-manager, SQLite)
-  Traefik:              ~80MB
-  cert-manager:         ~100MB
-  PostgreSQL:           256MB (limit)
-  Blog Pod 1:           256MB (limit)
-  Buffer:               ~288MB
+Laptop 1 (8GB total):
+  Proxmox host:           ~500MB
+  k3s-server VM (4096MB):
+    k3s control plane:    ~300MB (API server, scheduler, controller-manager, SQLite)
+    Traefik:              ~80MB
+    cert-manager:         ~100MB
+    PostgreSQL:           512MB (limit)
+    postgres_exporter:    ~64MB (limit)
+    Blog Pod 1:           512MB (limit)
+    Buffer:               ~2.5GB (headroom for HPA pods, future services)
+  Remaining on host:      ~3.4GB free
 
-Laptop 2 QEMU VM (k3s-agent, 1280MB):
-  k3s agent:            ~200MB (kubelet, flannel, kube-proxy)
-  MinIO:                256MB (limit)
-  Blog Pod 2:           256MB (limit)
-  Buffer:               ~568MB (absorbs HPA scaling to pod 3 or 4)
+Laptop 2 (8GB total):
+  Proxmox host:           ~500MB
+  k3s-agent VM (3072MB):
+    k3s agent:            ~200MB (kubelet, flannel, kube-proxy)
+    MinIO:                512MB (limit)
+    Blog Pod 2:           512MB (limit)
+    Buffer:               ~1.8GB (absorbs HPA scaling to pods 3-6)
+  Monitoring VM (2048MB):
+    OS + overhead:        ~200MB
+    Prometheus:           ~400MB (30d retention, ~10 targets)
+    Grafana:              ~250MB
+    Alertmanager:         ~50MB
+    Loki:                 ~200MB
+    Blackbox Exporter:    ~20MB
+    Node Exporter:        ~20MB
+    Buffer:               ~900MB
+  Remaining on host:      ~2.3GB free
 ```
+
+## Monitoring Architecture
+
+```mermaid
+graph TD
+    subgraph monVM [Monitoring VM - 192.168.1.12]
+        Prom[Prometheus]
+        Grafana[Grafana]
+        AM[Alertmanager]
+        Loki[Loki]
+        BB[Blackbox Exporter]
+        NE0[Node Exporter]
+    end
+
+    subgraph laptop1Host [Laptop 1 - Proxmox Host]
+        NE1[Node Exporter]
+        subgraph k3sServer [k3s-server VM]
+            NE2[Node Exporter]
+            PGExp[postgres_exporter]
+            Promtail[Promtail - ships Traefik logs]
+        end
+    end
+
+    subgraph laptop2Host [Laptop 2 - Proxmox Host]
+        NE3[Node Exporter]
+        subgraph k3sAgent [k3s-agent VM]
+            NE4[Node Exporter]
+            MinIOMetrics[MinIO /metrics]
+        end
+    end
+
+    subgraph internet [External]
+        BlogURL["blog.181094.xyz"]
+        OtherURL["181094.xyz"]
+    end
+
+    Prom -->|scrape :9100| NE0
+    Prom -->|scrape :9100| NE1
+    Prom -->|scrape :9100| NE2
+    Prom -->|scrape :9100| NE3
+    Prom -->|scrape :9100| NE4
+    Prom -->|scrape :9187| PGExp
+    Prom -->|scrape :9000| MinIOMetrics
+    Prom -->|alerts| AM
+    BB -->|probe| BlogURL
+    BB -->|probe| OtherURL
+    Prom -->|scrape| BB
+    Grafana -->|query| Prom
+    Grafana -->|query| Loki
+    Promtail -->|push logs| Loki
+    AM -->|notify| Discord[Discord / Telegram]
+```
+
+### Prometheus Scrape Targets
+
+| Job | Target | Port | Metrics |
+|---|---|---|---|
+| proxmox-host-1 | Laptop 1 bare metal | 9100 | CPU, RAM, disk, network, thermals |
+| proxmox-host-2 | Laptop 2 bare metal | 9100 | Same |
+| k3s-server-vm | 192.168.1.10 | 9100 | VM system metrics |
+| k3s-agent-vm | 192.168.1.11 | 9100 | VM system metrics |
+| monitoring-vm | localhost | 9100 | Monitoring VM health |
+| k3s-apiserver | 192.168.1.10 | 6443 | API request latency, etcd, admission controller |
+| postgresql | NodePort 30187 | 9187 | Connections, query duration, cache hit ratio, dead tuples |
+| minio | 192.168.1.11 | 9000 | Storage used, requests/s, errors |
+| blog-app | NodePort | 4321 | Request latency, cache hits, active sessions (custom) |
+| blackbox-http | localhost | 9115 | Uptime, SSL expiry, response time for external URLs |
+
+### Key Alert Rules
+
+| Alert | Condition | Severity | Action |
+|---|---|---|---|
+| NodeDown | `up == 0` for 1m | critical | Scrape target unreachable -- check host/VM |
+| HighCPU | CPU > 85% for 5m | warning | Investigate load, consider HPA tuning |
+| HighMemory | RAM > 90% for 5m | warning | Check for memory leaks, adjust limits |
+| DiskAlmostFull | Disk > 85% for 10m | warning | Clean up old data, expand storage |
+| BlogDown | Blackbox probe fails for 2m | critical | Check k3s pods, Cloudflare failover should activate |
+| SSLExpiringSoon | Cert expires < 7 days | warning | Check cert-manager renewal |
+| PostgreSQLDown | pg_up == 0 for 1m | critical | Check StatefulSet, PVC |
+| TooManyConnections | PG connections > 80% max | warning | Add connection pooling |
 
 ## Security Layers
 
