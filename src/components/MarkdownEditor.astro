@@ -1,0 +1,12 @@
+---
+interface Props {
+  name?: string;
+  value?: string;
+}
+
+const { name = 'content', value = '' } = Astro.props;
+---
+
+<div class="markdown-editor">
+  <textarea name={name} rows={20} cols={80}>{value}</textarea>
+</div>

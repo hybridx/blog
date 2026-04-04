@@ -1,0 +1,18 @@
+---
+interface Props {
+  comments: { id: string; content: string; author?: string }[];
+}
+
+const { comments } = Astro.props;
+---
+
+<ul class="comment-list">
+  {
+    comments.map((c) => (
+      <li>
+        {c.author && <strong>{c.author}</strong>}
+        <p>{c.content}</p>
+      </li>
+    ))
+  }
+</ul>

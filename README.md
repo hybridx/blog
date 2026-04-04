@@ -1,120 +1,90 @@
-# blog.181094.xyz
+# Astro Starter Kit: Minimal
 
-A self-hosted, server-side rendered blog platform running on a 2-node k3s cluster (QEMU VMs on Proxmox laptops). Built with hand-crafted auth, OAuth commenting, S3-compatible image storage, automatic CDN failover, Kubernetes scaling, and Podman-based CI/CD.
-
-## What This Project Demonstrates
-
-- **Full-stack TypeScript**: Astro SSR, Drizzle ORM, hand-built OAuth2 and session management
-- **Infrastructure engineering**: k3s on Proxmox, StatefulSets, HPA, PDB, rolling updates, cert-manager
-- **Resilience design**: CDN failover via Cloudflare Worker, battery-backed compute nodes, wired networking with UPS
-- **Production practices**: Load testing (k6), health checks, container builds (Podman), CI/CD (GitHub Actions)
-- **Observability**: Prometheus + Grafana + Alertmanager in a dedicated monitoring VM, Loki for access log analytics
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| SSR Framework | Astro 5 (Node adapter) |
-| UI Components | @thundrex/web-components (LitElement) |
-| Database | PostgreSQL 17 + Drizzle ORM |
-| Object Storage | MinIO (S3-compatible) |
-| Auth | Hand-built OAuth2 (GitHub, Google) + session management |
-| Container Build | Podman + Buildah |
-| Orchestration | k3s on QEMU VMs (Proxmox) |
-| TLS | cert-manager + Let's Encrypt (DNS-01 via Cloudflare) |
-| Edge / Failover | Cloudflare Worker + GitHub Pages static fallback |
-| CI/CD | GitHub Actions |
-| Monitoring | Prometheus + Grafana + Alertmanager (dedicated QEMU VM) |
-| Log Analytics | Loki + Promtail (Traefik access logs for web analytics) |
-| Alerting | Alertmanager -> Discord / Telegram |
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [Implementation Guide](docs/GUIDE.md) | Step-by-step build guide covering infrastructure, application, scaling, failover, and CI/CD |
-| [High-Level Design](docs/HLD.md) | System architecture, requirements, capacity planning, API design, and availability strategy |
-| [Low-Level Design](docs/LLD.md) | Module architecture, database schema with indexes, caching strategy, auth pseudocode, and security layers |
-| [AI Usage Guide](docs/AI-USAGE.md) | Where to use AI as a multiplier and where to write code yourself for maximum learning |
-
-## Architecture Overview
-
-```mermaid
-graph TD
-    subgraph internet [Internet]
-        Reader[Reader / Browser]
-        CF[Cloudflare Worker]
-    end
-
-    subgraph fallback [Failover]
-        GHPages[GitHub Pages - Static Blog]
-    end
-
-    subgraph github [GitHub]
-        ContentRepo[blog-content repo]
-        AppRepo[blog-app repo]
-        GHActions[GitHub Actions]
-        GHCR[ghcr.io Container Registry]
-    end
-
-    subgraph laptop1 [Laptop 1 - k3s Server]
-        subgraph k3sCP [k3s Control Plane]
-            API[API Server]
-            Traefik[Traefik Ingress]
-        end
-        BlogPod1[Blog App Pod]
-        PG[PostgreSQL StatefulSet]
-    end
-
-    subgraph laptop2 [Laptop 2 - k3s Agent]
-        BlogPod2[Blog App Pod - Replica 2]
-        MinIO[MinIO StatefulSet]
-    end
-
-    subgraph monVM [Laptop 2 - Monitoring VM]
-        Prometheus[Prometheus]
-        Grafana[Grafana + Loki]
-    end
-
-    Reader --> CF
-    CF -->|healthy| Traefik
-    CF -->|unhealthy| GHPages
-    Traefik --> BlogPod1
-    Traefik --> BlogPod2
-    BlogPod1 --> PG
-    BlogPod2 --> PG
-    BlogPod1 --> MinIO
-    BlogPod2 --> MinIO
-    BlogPod1 -->|sync content| ContentRepo
-    AppRepo -->|push triggers| GHActions
-    ContentRepo -->|push triggers| GHActions
-    GHActions -->|build + push image| GHCR
-    GHActions -->|build static| GHPages
-    Prometheus -->|scrape| BlogPod1
-    Prometheus -->|scrape| BlogPod2
-    Prometheus -->|scrape| PG
-    Prometheus -->|scrape| MinIO
+```sh
+npm create astro@latest -- --template minimal
 ```
 
-## Timeline
+> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
 
-| Weekend | Phase | Deliverable |
-|---|---|---|
-| 1 | k3s cluster + PostgreSQL + MinIO | 2-node cluster running, databases accessible |
-| 2 | Blog app: content, admin, markdown rendering | SSR blog reading posts from GitHub, admin panel working |
-| 3 | Auth + comments + image upload + deploy | OAuth login, commenting, MinIO images, blog.181094.xyz live |
-| 4 | Scaling: HPA, probes, PDB, load testing | Understand exactly where the system breaks |
-| 4-5 | Failover: static site + Cloudflare Worker | Blog stays readable when power goes out |
-| 5 | CI/CD: Podman + GitHub Actions | Push code, auto-deploy to k3s |
-| 5-6 | Polish, first blog post | Write "Building a Resilient Homelab Blog" as the inaugural post |
-| 6-7 | Monitoring: Prometheus + Grafana + Alertmanager | Dedicated monitoring VM watching all hosts, VMs, services, and websites |
+## 🚀 Project Structure
 
-## Repo Structure
+Inside of your Astro project, you'll see the following folders and files:
 
-- **hybridx/blog** -- Astro app, k8s manifests, Containerfile, CI/CD workflows, Cloudflare Worker
-- **hybridx/blog-content** -- Pure markdown files + image references (separate repo for independent static rebuilds)
-- **hybridx/blog-backups** (private) -- Database backup dumps from CronJob
+```text
+/
+├── public/
+├── src/
+│   └── pages/
+│       └── index.astro
+└── package.json
+```
 
-## License
+Astro looks for `.astro` or `.md` files in the `src/pages/` directory. Each page is exposed as a route based on its file name.
 
-MIT
+There's nothing special about `src/components/`, but that's where we like to put any Astro/React/Vue/Svelte/Preact components.
+
+Any static assets, like images, can be placed in the `public/` directory.
+
+## 🧞 Commands
+
+All commands are run from the root of the project, from a terminal:
+
+| Command                   | Action                                           |
+| :------------------------ | :----------------------------------------------- |
+| `npm install`             | Installs dependencies                            |
+| `npm run dev`             | Starts local dev server at `localhost:4321`      |
+| `npm run build`           | Build your production site to `./dist/`          |
+| `npm run preview`         | Preview your build locally, before deploying     |
+| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
+| `npm run astro -- --help` | Get help using the Astro CLI                     |
+
+## Local stack (Podman or Docker)
+
+This app expects **PostgreSQL** and **MinIO** with the same env names you use in production (`DATABASE_URL`, `MINIO_*`). For local development:
+
+1. Copy env template: `cp .env.example .env` and edit secrets (OAuth, `SESSION_SECRET`, etc.).
+2. Start services: `podman compose up -d` or `docker compose up -d` (see `compose.yaml`). Convenience scripts: `npm run compose:up` / `compose:down` / `compose:logs` (these use Podman; use `docker compose …` directly if you prefer Docker).
+3. Apply the Drizzle schema: `npm run db:push` (or `npx drizzle-kit push`).
+4. Run the app: `npm run dev`.
+
+Postgres listens on **5432**, MinIO API on **9000**, MinIO console on **9001**. The `minio-init` service creates the `blog-images` bucket to match `MINIO_BUCKET` in `.env.example`.
+
+### Verify Postgres and MinIO
+
+**1. Schema reaches the database** (strong signal that `DATABASE_URL` is correct):
+
+```sh
+npm run db:push
+```
+
+If this completes without error, Drizzle can connect and apply the schema.
+
+**2. Postgres is accepting connections** (no app required):
+
+```sh
+# If you use Compose from this repo (service name `postgres`):
+podman compose exec postgres pg_isready -U blog -d blog
+# or: docker compose exec postgres pg_isready -U blog -d blog
+```
+
+You should see `accepting connections`. Optional: `podman compose exec postgres psql -U blog -d blog -c 'SELECT 1'`.
+
+**3. MinIO API responds** (process is up):
+
+```sh
+curl -sf http://localhost:9000/minio/health/live && echo " OK"
+```
+
+**4. App-level check** (loads `.env`, uses the same clients as production code). With the stack up and **`npm run dev`** running:
+
+```sh
+curl -s http://localhost:4321/api/health
+```
+
+You should get JSON with `"database": true` and `"minio": true` when both services match `.env`. If Postgres is down, this returns **503** and `"database": false`. If MinIO credentials or the bucket are wrong, `"minio"` stays false while Postgres can still be true.
+
+**Troubleshooting `"database": false` but `"minio": true`:** MinIO can still pass when defaults match your local stack, while Postgres fails if `DATABASE_URL` is wrong or unreachable. Ensure `DATABASE_URL` in `.env` uses **`localhost`** (or `127.0.0.1`) when you run `npm run dev` on your machine—not the Docker service name `postgres` (that hostname only works inside the Compose network). The app loads `.env` via `dotenv` in `src/lib/load-env.ts` so `process.env` matches what you use in production. After fixing `.env`, restart `npm run dev`.
+
+## 👀 Want to learn more?
+
+Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).

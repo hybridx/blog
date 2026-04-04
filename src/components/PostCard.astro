@@ -1,0 +1,14 @@
+---
+interface Props {
+  slug: string;
+  title: string;
+  excerpt?: string;
+}
+
+const { slug, title, excerpt } = Astro.props;
+---
+
+<article class="post-card">
+  <h2><a href={`/blog/${slug}`}>{title}</a></h2>
+  {excerpt && <p>{excerpt}</p>}
+</article>

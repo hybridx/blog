@@ -1,0 +1,16 @@
+---
+import BlogPost from '../../layouts/BlogPost.astro';
+import CommentForm from '../../components/CommentForm.astro';
+import CommentList from '../../components/CommentList.astro';
+
+export const prerender = false;
+
+const { slug } = Astro.params;
+---
+
+<BlogPost title={slug ?? 'Post'}>
+  <h1>{slug}</h1>
+  <p>Post content will load from GitHub.</p>
+  <CommentList comments={[]} />
+  {slug && <CommentForm postSlug={slug} />}
+</BlogPost>

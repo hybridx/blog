@@ -1,0 +1,56 @@
+# Local stack aligned with k8s-style services: PostgreSQL + MinIO.
+# Podman:  podman compose up -d
+# Docker:  docker compose up -d
+#
+# Then: cp .env.example .env && npx drizzle-kit push && npm run dev
+
+services:
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: blog
+      POSTGRES_PASSWORD: blog
+      POSTGRES_DB: blog
+    ports:
+      - '5432:5432'
+    volumes:
+      - blog_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U blog -d blog']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: docker.io/minio/minio:latest
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - blog_minio:/data
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        set -e
+        for i in $$(seq 1 60); do
+          if mc alias set local http://minio:9000 minioadmin minioadmin 2>/dev/null; then
+            if mc ready local 2>/dev/null; then break; fi
+          fi
+          sleep 1
+        done
+        mc mb local/blog-images --ignore-existing
+    restart: 'no'
+
+volumes:
+  blog_postgres:
+  blog_minio:

@@ -1,0 +1,18 @@
+---
+const links = [
+  { href: '/admin', label: 'Dashboard' },
+  { href: '/admin/write', label: 'Write' },
+  { href: '/admin/images', label: 'Images' },
+  { href: '/admin/login', label: 'Login' },
+];
+---
+
+<nav class="admin-nav">
+  <ul>
+    {links.map((l) => (
+      <li>
+        <a href={l.href}>{l.label}</a>
+      </li>
+    ))}
+  </ul>
+</nav>

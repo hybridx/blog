@@ -1,0 +1,12 @@
+---
+import Admin from '../../layouts/Admin.astro';
+import MarkdownEditor from '../../components/MarkdownEditor.astro';
+---
+
+<Admin title="Write post">
+  <h1>New post</h1>
+  <form method="post" action="/api/webhook">
+    <MarkdownEditor />
+    <button type="submit">Save</button>
+  </form>
+</Admin>

@@ -1,0 +1,17 @@
+---
+import Base from './Base.astro';
+import AdminNav from '../components/AdminNav.astro';
+
+interface Props {
+  title?: string;
+}
+
+const { title = 'Admin' } = Astro.props;
+---
+
+<Base title={title}>
+  <AdminNav />
+  <main>
+    <slot />
+  </main>
+</Base>

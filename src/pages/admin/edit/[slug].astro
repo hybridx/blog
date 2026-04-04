@@ -1,0 +1,13 @@
+---
+import Admin from '../../../layouts/Admin.astro';
+import MarkdownEditor from '../../../components/MarkdownEditor.astro';
+
+export const prerender = false;
+
+const { slug } = Astro.params;
+---
+
+<Admin title={`Edit: ${slug}`}>
+  <h1>Edit {slug}</h1>
+  <MarkdownEditor value="" />
+</Admin>
